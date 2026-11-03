@@ -14,7 +14,7 @@ if (index < 0 || !process.argv[index + 1]) throw new Error('Usage: node scripts/
 const directory = resolve(process.argv[index + 1]);
 const packaged = process.argv.includes('--packaged');
 const output = resolve(packaged ? 'test-results/desktop-followup' : 'test-results/native-engine'); await mkdir(output, { recursive: true });
-const report = { at: new Date().toISOString(), source: packaged ? 'Packaged desktop Browser and signed Workbench add-on; isolated temporary store' : 'Actual installed desktop Browser and enabled Workbench add-on', state: 'running', checks: [], errors: [] };
+const report = { at: new Date().toISOString(), source: packaged ? 'Packaged desktop Browser and signed Workbench add-on; isolated temporary store' : 'Actual installed desktop Browser and enabled Workbench add-on', actualInstalledProof: !packaged, state: 'running', checks: [], errors: [] };
 async function service(kind) {
   const record = JSON.parse(await readFile(join(directory, kind, 'service.json'), 'utf8'));
   const token = (await readFile(join(directory, kind, 'admin-token'), 'utf8')).trim();

@@ -6,6 +6,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
+import { createConnection } from 'node:net';
+import { get } from 'node:http';
+import { setTimeout as delay } from 'node:timers/promises';
 
 class FakeRuntime extends EventEmitter {
   submissions = 0;
@@ -30,6 +33,26 @@ test('calendar preview and creation are authenticated, documented and reject amb
  }finally{await f.close();}
 });
 const token = 'a-valid-test-access-token-with-enough-entropy';
+test('offline documentation keeps versioned contracts searchable without authorizing private API access', async () => {
+  const f = await fixture();
+  try {
+    const before = f.runtime.submissions;
+    for (const url of ['/docs', '/docs/', '/docs/app.js', '/docs/styles.css', '/docs/guides.json', '/docs/context.json', '/docs/openapi.json', '/docs/vesper-mark.svg']) {
+      const response = await f.app.inject(url);
+      assert.equal(response.statusCode, 200, url); assert.ok(!response.body.includes(token));
+    }
+    const context = (await f.app.inject('/docs/context.json')).json();
+    assert.equal(context.product, 'Workbench'); assert.equal(context.apiVersion, '1.0');
+    const docs = (await f.app.inject('/docs/openapi.json')).json();
+    assert.ok(docs.paths['/api/v1/runs']); assert.ok(docs.paths['/api/v1/schedules/preview']);
+    assert.ok(Object.keys(docs.paths).every(p => p.startsWith('/api/v1/')));
+    assert.equal((await f.app.inject('/api/v1/runs')).statusCode, 401);
+    assert.equal((await f.app.inject('/api/v1/openapi.json')).statusCode, 401);
+    assert.equal((await f.app.inject('/docs/admin-token')).statusCode, 404);
+    assert.equal((await f.app.inject({ method: 'POST', url: '/docs/openapi.json', payload: {} })).statusCode, 404);
+    assert.equal(f.runtime.submissions, before);
+  } finally { await f.close(); }
+});
 async function fixture() {
   const directory = await mkdtemp(path.join(tmpdir(), 'workbench-api-'));
   const config = await loadConfig({ WORKBENCH_DATA_DIR: directory, EXPORT_DIR: directory, WORKBENCH_TOKEN: token });
@@ -37,6 +60,35 @@ async function fixture() {
   const app = await createServer(config, runtime, { publicInventory: () => [] });
   return { directory, runtime, app, close: async () => { await app.close(); await rm(directory, { recursive: true, force: true }); } };
 }
+
+test('shutdown drains unused browser preconnections and incomplete headers without admitting a run', async () => {
+  const f = await fixture(); const sockets: ReturnType<typeof createConnection>[] = []; let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const origin = await f.app.listen({ host: '127.0.0.1', port: 0 });
+    for (const partial of [false, true]) {
+      const socket = createConnection({ host: '127.0.0.1', port: Number(new URL(origin).port) }); sockets.push(socket);
+      await new Promise<void>((done, reject) => { socket.once('connect', done); socket.once('error', reject); });
+      if (partial) socket.write('POST /api/v1/runs HTTP/1.1\r\nHost: localhost\r\n');
+    }
+    await Promise.race([f.app.close(), new Promise((_, reject) => { timeout = setTimeout(() => reject(Error('Preconnections blocked graceful shutdown')), 1500); })]);
+    assert.equal(f.runtime.submissions, 0);
+  } finally { clearTimeout(timeout); for (const socket of sockets) socket.destroy(); await f.close(); }
+});
+
+test('graceful shutdown preserves an admitted HTTP request while closing an unused preconnection', async () => {
+  const f = await fixture(); let release!: () => void, admitted!: () => void;
+  const gate = new Promise<void>(done => { release = done; }), ready = new Promise<void>(done => { admitted = done; });
+  f.app.get('/owned-slow-response', async () => { admitted(); await gate; return { preserved: true }; });
+  let idle: ReturnType<typeof createConnection> | undefined;
+  try {
+    const origin = await f.app.listen({ host: '127.0.0.1', port: 0 });
+    idle = createConnection({ host: '127.0.0.1', port: Number(new URL(origin).port) }); await new Promise<void>((done, reject) => { idle!.once('connect', done); idle!.once('error', reject); });
+    const response = new Promise<string>((done, reject) => { get(origin + '/owned-slow-response', { agent: false }, message => { let body = ''; message.on('data', chunk => { body += chunk; }); message.on('end', () => done(body)); message.on('error', reject); }).on('error', reject); });
+    await ready; let closed = false; const draining = f.app.close().then(() => { closed = true; });
+    await delay(50); assert.equal(closed, false, 'Do not cut off an admitted response'); release();
+    assert.deepEqual(JSON.parse(await response), { preserved: true }); await draining;
+  } finally { release(); idle?.destroy(); await f.close(); }
+});
 test('authentication gates API and rejects cross-origin cookies and websocket attempts', async () => {
   const f = await fixture();
   try {

@@ -25,4 +25,10 @@ const apiTitle=document.createElement('h3');apiTitle.textContent='Local API';
 const apiText=document.createElement('p');apiText.textContent='Automations and external clients use this authenticated local service. Keep access tokens in private files.';
 const apiLink=document.createElement('a');apiLink.href='/api/v1/openapi.json';apiLink.textContent='Open API specification';apiLink.download='vesper-workbench-api.json';
 const apiAddress=document.createElement('p');apiAddress.className='field-hint';apiAddress.textContent=location.origin+'/api/v1';
-apiHelp.append(apiTitle,apiText,apiAddress,apiLink);byId('system-dialog').querySelector('.drawer-body').append(apiHelp);
+const apiDocs=document.createElement('button');apiDocs.type='button';apiDocs.className='button outline small';apiDocs.textContent='API Docs';
+async function openApiDocs(){
+  try{if(window.vesperDesktop?.openApiDocs)await window.vesperDesktop.openApiDocs();else window.open(new URL('/docs',location.origin).href,'_blank','noopener,noreferrer');}
+  catch(error){apiText.textContent='Could not open API Docs. '+error.message;}
+}
+apiDocs.addEventListener('click',openApiDocs);byId('api-docs-button').addEventListener('click',openApiDocs);
+apiHelp.append(apiTitle,apiText,apiAddress,apiDocs,apiLink);byId('system-dialog').querySelector('.drawer-body').append(apiHelp);

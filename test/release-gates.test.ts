@@ -8,13 +8,52 @@ import { createHash } from 'node:crypto';
 
 const versions = { browser: '0.4.4', workbench: '0.5.6' }, sha = '1'.repeat(64);
 function evidence() {
-  const accepted = { state: 'passed', errors: [], versions, visualReviewPassed: true };
+  const accepted = { state: 'passed', errors: [], versions, visualReviewPassed: true, actualInstalledProof: true };
   const surfacePolicies = ['webgl-debug-restriction','offline-audio-seed','local-font-discovery'];
   const proof = { state: 'passed', errors: [], nativeProof: true, implementation: 'native-chromium-patches', executableSha256: sha, surfacePolicies, cases: ['baseline','seed-a','seed-a-restart','seed-b','invalid-fallback','surface-policy-a','surface-policy-a-restart','surface-policy-b','surface-policy-invalid'].map(name => ({ name })) };
   const publicCommit = { main: 'commit', workflow: { sha: 'commit', status: 'completed', conclusion: 'success' } };
-  return { versions, status: { groups: [{ checks: [{ id: 'owned-feature', state: 'verified' }] }] }, source: { suites: 2, passed: 151, failed: 0 }, packaged: accepted, installed: accepted, proxies: { ...accepted, actualInstalledProof: true, proxyRequests: 1, run: { state: 'saved', sha256: sha, archiveBytes: 65000 } }, ui: { state: 'passed', versions, originalMothIconVisible: true, nativeEmbeddedWorkbench: true }, python: { state: 'passed', version: versions.workbench, calendarDSTPreview: true, futureScheduleCreatedPausedRemoved: true }, audit: { metadata: { vulnerabilities: { total: 0 } } }, kernel: { revision: 'pinned' }, build: { revision: 'pinned', customKernelCompiled: true, status: 'compiled-awaiting-native-qualification', executableSha256: sha }, currentExecutableSha256: sha, units: { revision: 'pinned', status: 'native-unit-tests-passed', nativeTestExecutions: 26 }, unitXmlVerified: true, direct: proof, copied: { revision: 'pinned', executableSha256: sha, nativeUnitExecutions: 26, qualification: proof }, runtimeFilesVerified: true, integration: { ...accepted, surfacePolicies, nativeProof: true, installedKernelChanged: true, executableSha256: sha, run: { state: 'saved' } }, linux: { ...accepted, platform: 'linux', installerExecuted: true, sandboxVerified: true, nativeKernelQualified: true }, publication: { browser: publicCommit, workbench: publicCommit } };
+  return { versions, status: { groups: [{ checks: [{ id: 'owned-feature', state: 'verified' }] }] }, source: { suites: 2, passed: 151, failed: 0 }, packaged: accepted, installed: accepted, proxies: { ...accepted, actualInstalledProof: true, proxyRequests: 1, run: { state: 'saved', sha256: sha, archiveBytes: 65000 } }, ui: { state: 'passed', versions, actualInstalledProof: true, originalMothIconVisible: true, nativeEmbeddedWorkbench: true }, python: { state: 'passed', version: versions.workbench, calendarDSTPreview: true, futureScheduleCreatedPausedRemoved: true }, audit: { ...accepted, metadata: { vulnerabilities: { total: 0 } } }, kernel: { revision: 'pinned' }, build: { revision: 'pinned', customKernelCompiled: true, status: 'compiled-awaiting-native-qualification', executableSha256: sha }, currentExecutableSha256: sha, units: { revision: 'pinned', status: 'native-unit-tests-passed', nativeTestExecutions: 26 }, unitXmlVerified: true, direct: proof, copied: { revision: 'pinned', executableSha256: sha, nativeUnitExecutions: 26, qualification: proof }, runtimeFilesVerified: true, integration: { ...accepted, surfacePolicies, nativeProof: true, installedKernelChanged: true, executableSha256: sha, run: { state: 'saved' } }, linux: { ...accepted, platform: 'linux', installerExecuted: true, sandboxVerified: true, nativeKernelQualified: true }, publication: { versions, browser: publicCommit, workbench: publicCommit } };
 }
 const pending = (result: any, id: string) => assert.equal(result.gates.find((gate: any) => gate.id === id).state, 'pending');
+
+test('owned packaged API, UI or native receipts cannot be promoted to actual installation evidence', () => {
+  for (const actualInstalledProof of [undefined, false]) {
+    const input = evidence();
+    const result = evaluateReleaseGates({ ...input, installed: { ...input.installed, actualInstalledProof }, ui: { ...input.ui, actualInstalledProof }, integration: { ...input.integration, actualInstalledProof } });
+    for (const id of ['actual-installed-pair', 'actual-installed-ui', 'installed-native-integration']) pending(result, id);
+  }
+  const input = evidence();
+  pending(evaluateReleaseGates({ ...input, integration: { ...input.integration, versions: { browser: '0.0.1', workbench: '0.0.1' } } }), 'installed-native-integration');
+});
+
+test('green public CI for an older source release cannot qualify a newer pair', () => {
+  const input = evidence();
+  for (const oldVersions of [undefined, { browser: '0.0.1', workbench: '0.0.1' }]) pending(evaluateReleaseGates({ ...input, publication: { ...input.publication, versions: oldVersions } }), 'public-source-ci');
+  assert.equal(evaluateReleaseGates(input).gates.find(gate => gate.id === 'public-source-ci')?.state, 'passed');
+});
+
+test('an application-only update can retain its qualified kernel only with current backup, idle and complete-runtime proof', () => {
+  const input = evidence();
+  const retained = { ...input.integration, installedKernelChanged: false, installedKernelRetained: true, retentionVerification: { backupVerified: true, idlePreflightPassed: true, runtimeFilesVerified: true, executableSha256: sha } };
+  assert.equal(evaluateReleaseGates({ ...input, integration: retained }).gates.find(gate => gate.id === 'installed-native-integration')?.state, 'passed');
+  for (const field of ['backupVerified','idlePreflightPassed','runtimeFilesVerified','executableSha256']) {
+    const invalid = { ...retained, retentionVerification: { ...retained.retentionVerification, [field]: undefined } };
+    pending(evaluateReleaseGates({ ...input, integration: invalid }), 'installed-native-integration');
+  }
+  pending(evaluateReleaseGates({ ...input, integration: { ...retained, retentionVerification: { ...retained.retentionVerification, executableSha256: '2'.repeat(64) } } }), 'installed-native-integration');
+});
+
+test('an old, incomplete or failed zero-count audit cannot accept a new release', () => {
+  const valid = evidence();
+  for (const audit of [
+    { metadata: { vulnerabilities: { total: 0 } } },
+    { ...valid.audit, versions: { browser: '0.0.1', workbench: '0.0.1' } },
+    { ...valid.audit, state: 'running' },
+    { ...valid.audit, errors: ['Registry query failed'] },
+    { ...valid.audit, metadata: { vulnerabilities: { total: 8 } } },
+  ]) pending(evaluateReleaseGates({ ...valid, audit }), 'production-dependencies');
+  assert.equal(evaluateReleaseGates(valid).gates.find(gate => gate.id === 'production-dependencies')?.state, 'passed');
+});
 
 test('Linux runtime acceptance remains pending without a completed installed UI review', () => {
   for (const visualReviewPassed of [undefined, false]) {
