@@ -11,6 +11,7 @@ import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServerResponse } from 'node:http';
+import type { Socket } from 'node:net';
 import { AccessControl } from './auth.js';
 import type { Config } from './config.js';
 import type { PacePreset } from './actions.js';
@@ -20,7 +21,7 @@ import type { EngineAdapter } from './engine.js';
 import { isLocalEngine } from './local-engine.js';
 import { randomUUID } from 'node:crypto';
 import swagger from '@fastify/swagger';
-import { AdmissionJournal } from '@true-utopian/vesper-browser';
+import { AdmissionJournal, documentationAsset, documentationContext, versionedDocumentationContract } from '@true-utopian/vesper-browser';
 import { Scheduler } from './scheduler.js';
 import { calendarOccurrences } from './calendar.js';
 import { FlowLibrary, type FlowPublisher } from './flow-library.js';
@@ -52,6 +53,19 @@ function httpError(statusCode: number, message: string) { return Object.assign(n
 
 export async function createServer(config: Config, runtime: WorkbenchRuntime, proxies: WorkbenchProxies, engine?: EngineAdapter) {
   const app = Fastify({ logger: false, bodyLimit: 256 * 1024, trustProxy: false });
+  // Chromium can preconnect without sending an HTTP request. Node's normal
+  // idle-connection drain does not close those sockets, so a docs tab could
+  // keep desktop shutdown waiting beyond its deadline. Drain only connections
+  // that never completed request headers; admitted requests still finish.
+  const unstarted = new Set<Socket>(); let closing = false;
+  const connected = (socket: Socket) => {
+    if (closing) { socket.destroy(); return; }
+    unstarted.add(socket); socket.once('close', () => unstarted.delete(socket));
+  };
+  const requested = (request: import('node:http').IncomingMessage) => { unstarted.delete(request.socket); };
+  app.server.on('connection', connected); app.server.on('request', requested);
+  app.addHook('preClose', async () => { closing = true; for (const socket of unstarted) socket.destroy(); });
+  app.addHook('onClose', async () => { app.server.off('connection', connected); app.server.off('request', requested); unstarted.clear(); });
   const access = new AccessControl(config.token);
   const admissions = new AdmissionJournal(path.join(config.dataDir, 'admissions'));
   const scheduler = new Scheduler(path.join(config.dataDir, 'scheduler'), runtime);
@@ -94,6 +108,17 @@ export async function createServer(config: Config, runtime: WorkbenchRuntime, pr
     reply.code(status >= 400 && status <= 599 ? status : 500).send({ error: status < 500 && error instanceof Error ? error.message : 'The operation failed. Check the run state or engine availability.' });
   });
   app.get('/healthz', async () => ({ ok: true }));
+  for (const url of ['/docs', '/docs/']) app.get(url, async (_request, reply) => {
+    const asset = (await documentationAsset('/docs'))!;
+    return reply.type(asset.type).send(asset.body);
+  });
+  app.get('/docs/context.json', async () => documentationContext('Workbench', vesperWorkbenchVersion, config.vesperBrowserUrl));
+  app.get('/docs/openapi.json', async () => versionedDocumentationContract(app.swagger()));
+  app.get<{ Params: { file: string } }>('/docs/:file', async (request, reply) => {
+    const asset = await documentationAsset('/docs/' + request.params.file);
+    if (!asset) throw httpError(404, 'Documentation page not found.');
+    return reply.type(asset.type).send(asset.body);
+  });
   app.get('/api/capabilities', async () => ({ product: 'Vesper Workbench', author: 'true-utopian', version: vesperWorkbenchVersion, apiVersion: '1.0', capabilities: { scripts: true, schedules:true, calendarSchedules:{cronFields:5,timezones:true,preview:true,missedRuns:"coalesce"}, scheduleRecovery:'quarantine-uncertain-admission', flowEditor:!!runtime.installFlow, immutablePublishedRuns:true, flows: !!(config.databaseUrl || config.localCoordinator), localCoordinator: !!config.localCoordinator, idempotentAdmission: true, runControls: true, evidence: true, screenshots: true, archives: true, events: 'sse', browserService: !!config.vesperBrowserUrl } }));
   app.get('/api/openapi.json', async () => app.swagger());
   app.get('/api/schedules', async () => scheduler.list());
@@ -107,7 +132,7 @@ export async function createServer(config: Config, runtime: WorkbenchRuntime, pr
   });
   app.post<{ Params: { id: string }; Body: { revision: number } }>('/api/flow-library/:id/publish', { schema: { body: { type: 'object', required: ['revision'], additionalProperties: false, properties: { revision: { type: 'integer', minimum: 1 } } } } }, request => flowLibrary.publish(request.params.id,request.body.revision));
   app.post<{ Body: { token: string } }>('/api/login', {
-    schema: { body: { type: 'object', required: ['token'], additionalProperties: false, properties: { token: { type: 'string', maxLength: 512 } } } },
+    schema: { security: [], body: { type: 'object', required: ['token'], additionalProperties: false, properties: { token: { type: 'string', maxLength: 512 } } } },
   }, async (request, reply) => {
     const id = access.login(request.body.token, request.ip);
     reply.setCookie('workbench', id, { path: '/', httpOnly: true, sameSite: 'strict', secure: config.secureCookie, maxAge: 43200 });

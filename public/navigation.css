@@ -11,3 +11,5 @@ body[data-host-mode=plugin] .app-header{display:none}
 body[data-host-mode=plugin] .workspace-navigation{top:0}
 body[data-host-mode=plugin] .studio.workspace-page{top:0;height:100dvh}
 body[data-host-mode=plugin] .run-sidebar{height:100dvh}
+/* Keep the embedded tools visible when Browser gives the add-on a narrow pane. */
+@media(max-width:750px){body[data-host-mode=plugin] .workspace-navigation nav{flex-wrap:wrap;overflow:visible}body[data-host-mode=plugin] .workspace-navigation{padding-bottom:8px}}
