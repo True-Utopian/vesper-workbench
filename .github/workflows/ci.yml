@@ -17,6 +17,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: node scripts/readme-status.mjs --check
+      - run: node scripts/check-public-docs.mjs
       - run: npm audit --omit=dev --audit-level=high
   postgres:
     runs-on: ubuntu-latest
