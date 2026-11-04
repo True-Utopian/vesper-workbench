@@ -10,6 +10,9 @@ if (!value('--data-root') || !value('--output')) throw new Error('Usage: node sc
 const root = resolve(import.meta.dirname, '..'), directory = resolve(value('--data-root')), output = resolve(value('--output'));
 const report = { at: new Date().toISOString(), state: 'running', author: 'true-utopian', scope: value('--scope') || 'running-pair', versions: {}, checks: [], errors: [] };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+// Git text checkout line endings do not change rendered documentation.
+// Keep exact bytes for images and every other non-text resource.
+const documentDigest = (file, bytes) => digest(/\.(?:html|css|js|json|svg|txt)$/.test(file) ? Buffer.from(bytes.toString('utf8').replaceAll('\r\n','\n')) : bytes);
 const clients = {};
 async function privateSnapshot(relative) {
   const folder = join(directory, relative), files = [];
@@ -45,7 +48,7 @@ try {
     for (const [path, source] of [['/docs', 'index.html'], ['/docs/', 'index.html'], ['/docs/app.js', 'app.js'], ['/docs/styles.css', 'styles.css'], ['/docs/guides.json', 'guides.json'], ['/docs/vesper-mark.svg', '../vesper-mark.svg']]) {
       const response = await request(path); assert.equal(response.status, 200, path); assert.ok(response.headers.get('content-security-policy')?.includes("script-src 'self'"));
       const bytes = Buffer.from(await response.arrayBuffer());
-      assert.equal(digest(bytes), digest(await readFile(join(root, 'packages/vesper-browser/public/docs', source))), `${kind} has the reviewed bundled ${source}`);
+      assert.equal(documentDigest(source,bytes), documentDigest(source,await readFile(join(root, 'packages/vesper-browser/public/docs', source))), `${kind} has the reviewed bundled ${source}`);
       assert.ok(!bytes.toString().includes(token));
     }
     const schema = await (await request('/docs/openapi.json')).json();
@@ -56,6 +59,19 @@ try {
     assert.equal((await request('/api/v1/' + (kind === 'browser' ? 'profiles' : 'runs'))).status, 401);
     assert.equal((await request('/docs/admin-token')).status, 404);
     report.checks.push(`${kind}: current version, exact reviewed offline assets and versioned contract; token remains private and API authentication is unchanged`);
+    const handbookResponse = await request('/docs/handbook/offline-manifest.json'); assert.equal(handbookResponse.status, 200);
+    const handbook = await handbookResponse.json();
+    const expectedHandbook = JSON.parse(await readFile(join(root, 'packages/vesper-browser/public/docs/handbook/offline-manifest.json'), 'utf8'));
+    assert.deepEqual(handbook, expectedHandbook);
+    assert.equal(handbook.release.browser, report.versions.browser);
+    for (const file of handbook.files) {
+      const response = await request('/docs/handbook/' + file); assert.equal(response.status, 200, file);
+      const bytes = Buffer.from(await response.arrayBuffer());
+      assert.equal(documentDigest(file,bytes), documentDigest(file,await readFile(join(root, 'packages/vesper-browser/public/docs/handbook', file))), `${kind}: reviewed handbook ${file}`);
+      assert.ok(!bytes.toString().includes(token));
+    }
+    assert.equal((await request('/docs/handbook/wiki/private.html')).status, 404);
+    report.checks.push(`${kind}: all ${handbook.files.length} full-handbook files match reviewed source, stay read-only and preserve private API access`);
   }
   if (value('--examples')) {
     // These are the exact read-only samples copied from the reviewed docs UI.
