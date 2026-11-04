@@ -4,6 +4,7 @@ import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RunEventJournal, parseEventCursor } from '../src/run-events.js';
+import { holdWindowsFile } from '../packages/vesper-browser/test/fixtures/windows-file-lock.js';
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-events-'));
@@ -91,4 +92,14 @@ test('byte retention remains bounded and oversized events cannot advertise a com
     await assert.rejects(f.journal.append({ id: 'owned', log: 'x'.repeat(1024 * 1024) }), /capacity/);
     assert.equal(await readFile(f.file, 'utf8'), before);
   } finally { await f.close(); }
+});
+
+test('a real Windows sharing lock delays notification commit until atomic replacement succeeds', {skip:process.platform !== 'win32',timeout:20000}, async () => {
+  const f=await fixture();let commits=0,unavailable=0;
+  try {
+    f.journal.on('commit',()=>commits++);f.journal.on('unavailable',()=>unavailable++);
+    const old=f.journal.cursor,release=await holdWindowsFile(f.file),pending=f.journal.append({id:'owned-sharing',state:'saved'});void pending.catch(()=>{});
+    try {await new Promise(done=>setTimeout(done,150));assert.equal(commits,0);assert.equal(f.journal.cursor,old);} finally {await release();}
+    await pending;assert.equal(commits,1);assert.equal(unavailable,0);const reopened=new RunEventJournal(f.file);await reopened.init();assert.equal(JSON.parse(reopened.replay(old).events[0]!.data).state,'saved');
+  } finally {await f.close();}
 });

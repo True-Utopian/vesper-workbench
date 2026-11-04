@@ -3,10 +3,11 @@ import {
   createDecipheriv,
   createHash,
   randomBytes,
-  randomUUID,
 } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { durableWrite } from "@true-utopian/vesper-browser";
+export { durableWrite };
 
 export const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
@@ -17,30 +18,6 @@ export function stableId(value: string): string {
   const h = hex.join("");
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
-export async function durableWrite(
-  file: string,
-  contents: string | Buffer,
-): Promise<void> {
-  await mkdir(dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  const handle = await open(temporary, "wx", 0o600);
-  try {
-    await handle.writeFile(contents);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await rename(temporary, file);
-  if (process.platform !== "win32") {
-    const directory = await open(dirname(file), "r");
-    try {
-      await directory.sync();
-    } finally {
-      await directory.close();
-    }
-  }
-}
-
 export class InputVault {
   private key!: Buffer;
   constructor(private directory: string) {}
