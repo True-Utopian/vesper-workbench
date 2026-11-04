@@ -52,7 +52,7 @@ Packs with `identityPolicy: "required"` need a valid receipt at every completion
 
 ## Visual page branches and counted bodies
 
-These controls are implemented in the unreleased Browser **0.4.14** / Workbench **0.5.19** source candidate. The accepted installed pair remains **0.4.13 / 0.5.18** until matching packaged and actual installed qualification passes. The public feature inventory remains unchanged meanwhile.
+These controls are accepted in Browser **0.4.14** / Workbench **0.5.19**, with Windows Browser plus the signed Workbench add-on and the isolated Linux portable pair qualified. See the [visual flow qualification](visual-flow-qualification.md) for exact checks and platform limits.
 
 Open **Flow editor**, create or select a draft, then choose **Branch by page**. Its **Required states** are recognized actionable pages. **Add page route** adds another page and its destination; each accepted page needs a compatible destination. Branching observes fresh page evidence and selects a route without dispatching an action. Unknown, stale or ambiguous evidence does not choose a convenient branch; the existing review policy applies.
 
@@ -65,6 +65,18 @@ Repeat counts are integers from 1 to 99. **Flow settings** must allow at least `
 Saving changed execution content automatically advances its patch version. Unchanged and layout-only saves retain the version and hash. The library keeps a version floor across restart and Undo, so a later edit cannot reuse an already changed draft version. An explicitly supplied higher version is preserved. **Flow settings** shows the saved version; API clients should use the returned pack, hash and optimistic revision together. This keeps republished edits admissible without changing the coordinator's immutable-version safeguard or an older run's pinned definition.
 
 A `branch` uses `requires` and `next` like an input route. A `repeat` additionally declares `count` and `body`; its `next` routes are its exits. Both retain the common `onError`, `onTimeout`, `onUncertain` and `recoveryByState` fields. The maintained schema and compiler enforce compatible recognized states at every route.
+
+## Read values in the editor
+
+The extraction authoring controls below are an **unreleased source candidate** based on Workbench 0.5.19. They are not present in the accepted installed release until a later signed desktop/add-on package passes installed acceptance. This does not advance the public installed-feature count.
+
+Add the destination **Enter text** action first, then choose **Read value** to insert a read before it. Under **Flow settings → Page targets**, define a selector for the source and another for the destination. Both actions require a target with exactly one matching element. Choose the source **Target**, then choose **Element text** or **Element attribute** under **Read from**. Attribute reads support existing `data-*` and `aria-*` attributes, such as `data-reference`; they do not evaluate JavaScript or read arbitrary attributes.
+
+Give the result a **Value name**, choose a **Character limit** from 1 to 4096, and set **Value privacy** to Public or Sensitive. New reads default to Sensitive. Both settings keep values in run memory: the editor, checkpoints and event history do not store the extracted value. Saved browser profiles may retain website data independently of this setting. A read does not create a downloadable dataset or a persisted output file.
+
+On the destination **Enter text** action, choose **Value source → Read value**, then choose **Read value name**. The other sources are a declared text automation input, a prior text answer or fixed text of at most 500 characters. Save validates the complete graph: a capture must be definitely assigned on every incoming route before it is used. A named producer elsewhere in the graph alone is insufficient. Update consumers when renaming a value. New reads send recovery to operator review so a failed read cannot bypass directly into its consumer.
+
+Duplicate matches, a missing attribute or a value over the limit cause the existing error/review route to run. There is no silent truncation, first-match fallback or automatic substitution. Undo/Redo restores extraction settings, and Save/Publish retains the target, read mode, privacy and limit with the immutable flow revision. Derived values remain ephemeral across service restart and must be read again on the appropriate resumed route.
 
 ## Durable journal and restart
 

@@ -14,6 +14,9 @@
 .studio .flow-edge-label{font-family:inherit;font-size:11px;fill:var(--muted,#647186);stroke:var(--canvas,#edf0f5);stroke-width:4px;paint-order:stroke;stroke-linejoin:round}
 .studio .control-routes{border-top:1px solid var(--line,#dce1e9);margin-top:15px;padding-top:12px}
 .studio .control-routes h4{font-size:13px;margin:0 0 8px}
+.studio .extraction-controls{border-top:1px solid var(--line,#dce1e9);margin-top:15px;padding-top:12px}
+.studio .extraction-controls h4{font-size:13px;margin:0 0 8px}
+.studio .extraction-controls p{line-height:1.5;overflow-wrap:anywhere}
 @media(max-width:600px){.studio .graph-recovery-toggle{margin-left:0}.studio .graph-toolbar{position:relative}.studio .graph{height:380px}}
 @media(max-width:850px){.studio .studio-body{grid-template-columns:140px minmax(100px,1fr) 245px}.studio .inspector{position:relative;inset:auto;width:auto;box-shadow:none;overflow:auto}.studio .pane{overflow:auto}.schedule-studio .studio-body{grid-template-columns:1fr 1fr}.studio footer{flex-wrap:wrap}}
 @media(max-width:600px){.studio .studio-body{display:block;overflow:auto}.studio .graph{height:280px}.studio .pane{overflow:visible}.studio .inspector{width:auto}.studio footer{gap:6px;padding:8px}.studio .pane{padding:12px}}
