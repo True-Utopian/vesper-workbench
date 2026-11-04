@@ -210,7 +210,7 @@
   .login-panel { max-width: 425px; width: 100%; margin: auto; padding: 60px 0 50px; }
   .login-panel h1 { font-size: 32px; letter-spacing: -1px; line-height: 1.17; }
   .login-panel > p { color: var(--muted); font-size: 15px; line-height: 1.8; margin: 15px 0 29px; }
-  .login-panel form { padding: 26px; background: white; border: 1px solid #d3dfe8; border-radius: 9px; }
+  .login-panel form { padding: 26px; background: var(--white); border: 1px solid var(--line); border-radius: 9px; }
   .login-panel label { font-size: 12px; display: block; margin-bottom: 8px; }
   .login-panel input { width: 100%; }
   .login-panel .button { margin-top: 23px; width: 100%; justify-content: center; }

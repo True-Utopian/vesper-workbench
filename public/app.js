@@ -6,6 +6,7 @@ const IN_PROGRESS = new Set(['queued', 'starting', 'running', 'paused', 'awaitin
 const FAILURE = new Set(['failed', 'interrupted', 'export_failed']);
 const STATE_LABELS = { queued: 'Queued', starting: 'Starting', running: 'Running', awaiting_input: 'Needs input', paused: 'Paused', saving: 'Saving profile', saved: 'Saved', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted', export_failed: 'Export failed' };
 const state = { authenticated: false, automations: [], runs: [], selectedId: null, collection: 'runs', filter: 'all', query: '', status: null, proxies: [], source: null, interval: null, rfb: null, livePending: false, liveRevision: 0, liveTimeout: null, screenshotUrl: null, screenshotBusy: false, lastSnapshot: 0, snapshotRun: null, challengeId: null, jsonMode: false, actionBusy: false, refreshBusy: false };
+let authGeneration = 0;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -92,9 +93,12 @@ function clearSnapshot() {
 }
 
 function signOutLocally(message = '') {
+  authGeneration++;
   state.authenticated = false;
   state.source?.close();
   state.source = null;
+  pendingRunUpdates.clear(); pendingRunBytes = 0; refreshAgain = false;
+  refreshPromise = null; state.refreshBusy = false; $('refresh-button').disabled = false;
   clearInterval(state.interval);
   state.interval = null;
   disconnectLive(); clearSnapshot();
@@ -109,12 +113,13 @@ function signOutLocally(message = '') {
 }
 
 async function loadWorkspace() {
+  const generation = ++authGeneration;
   state.authenticated = true;
   $('access-token').value = '';
   $('login-screen').hidden = true;
   $('workspace').hidden = false;
   const results = await Promise.allSettled([api('/api/automations'), api('/api/runs'), api('/api/status')]);
-  if (!state.authenticated) return;
+  if (!state.authenticated || generation !== authGeneration) return;
   if (results[0].status === 'fulfilled') state.automations = Array.isArray(results[0].value) ? results[0].value : [];
   if (results[1].status === 'fulfilled') state.runs = Array.isArray(results[1].value) ? results[1].value : [];
   if (results[2].status === 'fulfilled') state.status = results[2].value;
@@ -140,28 +145,59 @@ function openEvents() {
   const source = new EventSource('/api/events'); state.source = source;
   source.onopen = () => { $('connection-status').textContent = 'Updates connected'; };
   source.onerror = () => { $('connection-status').textContent = 'Reconnecting updates…'; };
+  source.addEventListener('reset', () => {
+    if (state.authenticated && state.source === source) void refreshAll(false);
+  });
   source.addEventListener('run', event => {
-    if (!state.authenticated) return;
+    if (!state.authenticated || state.source !== source) return;
     try {
-      const run = JSON.parse(event.data); upsertRun(run); renderList();
-      if (run.id === state.selectedId) renderDetail();
+      const run = JSON.parse(event.data);
+      if (state.refreshBusy) bufferRunUpdate(run, event.data.length * 2);
+      else applyRunUpdate(run);
     } catch { $('connection-status').textContent = 'Update unavailable'; }
   });
 }
 
-async function refreshAll(announce = true) {
-  if (state.refreshBusy || !state.authenticated) return;
+const pendingRunUpdates = new Map();
+let refreshPromise = null;
+let pendingRunBytes = 0, refreshAgain = false;
+function bufferRunUpdate(run, bytes) {
+  pendingRunBytes -= pendingRunUpdates.get(run.id)?.bytes ?? 0;
+  pendingRunUpdates.delete(run.id);
+  if (pendingRunUpdates.size >= 512 || pendingRunBytes + bytes > 4 * 1024 * 1024) {
+    pendingRunUpdates.clear(); pendingRunBytes = 0; refreshAgain = true;
+  }
+  pendingRunUpdates.set(run.id, { run, bytes }); pendingRunBytes += bytes;
+}
+function applyRunUpdate(run) {
+  upsertRun(run); renderList();
+  if (run.id === state.selectedId) renderDetail();
+}
+function refreshAll(announce = true) {
+  if (!state.authenticated) return Promise.resolve();
+  if (refreshPromise) return refreshPromise;
+  const generation = authGeneration;
   state.refreshBusy = true; $('refresh-button').disabled = true;
+  refreshPromise = (async () => {
   try {
     const [runs, status, automations] = await Promise.all([api('/api/runs'), api('/api/status'), api('/api/automations')]);
-    if (!state.authenticated) return;
+    if (!state.authenticated || generation !== authGeneration) return;
     state.runs = Array.isArray(runs) ? runs : []; state.status = status;
     state.automations = Array.isArray(automations) ? automations : [];
     if (!$('new-run-dialog').open) populateAutomations();
     renderList(); renderStatus(); renderDetail();
     if (announce) toast('Workspace refreshed.');
-  } catch (error) { if (announce) toast(messageOf(error)); }
-  finally { state.refreshBusy = false; $('refresh-button').disabled = false; }
+  } catch (error) { if (announce && generation === authGeneration) toast(messageOf(error)); }
+  finally {
+    if (generation === authGeneration) {
+    state.refreshBusy = false; $('refresh-button').disabled = false;
+    if (state.authenticated) for (const { run } of pendingRunUpdates.values()) applyRunUpdate(run);
+    pendingRunUpdates.clear(); pendingRunBytes = 0; refreshPromise = null;
+    if (refreshAgain && state.authenticated) { refreshAgain = false; queueMicrotask(() => refreshAll(false)); }
+    }
+  }
+  })();
+  return refreshPromise;
 }
 
 function renderStatus() {
