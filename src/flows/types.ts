@@ -157,7 +157,17 @@ export interface CompleteStep {
   mode: "save" | "await-operator-then-save";
   identityReceipt?: string;
 }
-export type FlowStep = ActionStep | InputStep | ReviewStep | CompleteStep;
+export interface BranchStep extends Recoverable {
+  kind: "branch";
+  next: Routes;
+}
+export interface RepeatStep extends Recoverable {
+  kind: "repeat";
+  count: number;
+  body: string;
+  next: Routes;
+}
+export type FlowStep = ActionStep | InputStep | ReviewStep | CompleteStep | BranchStep | RepeatStep;
 export interface ChoiceSource {
   states: string[];
   container: string;
@@ -255,6 +265,8 @@ export interface FlowSnapshot {
   reconciliations: number;
   visits: Record<string, number>;
   attempts: Record<string, number>;
+  /** Completed admissions to each active counted loop body; persisted before dispatch. */
+  repeatCounts?: Record<string, number>;
   pending?: {
     id: string;
     stepId: string;

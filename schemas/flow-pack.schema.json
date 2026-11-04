@@ -821,6 +821,88 @@
               "$ref": "#/$defs/recoveryRoutes"
             }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "requires",
+            "next",
+            "onError",
+            "onTimeout",
+            "onUncertain",
+            "recoveryByState"
+          ],
+          "properties": {
+            "kind": {
+              "const": "branch"
+            },
+            "requires": {
+              "$ref": "#/$defs/ids"
+            },
+            "next": {
+              "$ref": "#/$defs/routes"
+            },
+            "onError": {
+              "$ref": "#/$defs/id"
+            },
+            "onTimeout": {
+              "$ref": "#/$defs/id"
+            },
+            "onUncertain": {
+              "$ref": "#/$defs/id"
+            },
+            "recoveryByState": {
+              "$ref": "#/$defs/recoveryRoutes"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "requires",
+            "next",
+            "onError",
+            "onTimeout",
+            "onUncertain",
+            "recoveryByState",
+            "count",
+            "body"
+          ],
+          "properties": {
+            "kind": {
+              "const": "repeat"
+            },
+            "requires": {
+              "$ref": "#/$defs/ids"
+            },
+            "next": {
+              "$ref": "#/$defs/routes"
+            },
+            "onError": {
+              "$ref": "#/$defs/id"
+            },
+            "onTimeout": {
+              "$ref": "#/$defs/id"
+            },
+            "onUncertain": {
+              "$ref": "#/$defs/id"
+            },
+            "recoveryByState": {
+              "$ref": "#/$defs/recoveryRoutes"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 99
+            },
+            "body": {
+              "$ref": "#/$defs/id"
+            }
+          }
         }
       ]
     },
