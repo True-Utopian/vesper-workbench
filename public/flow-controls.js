@@ -1,3 +1,4 @@
+import {newExtractionOperation} from './extraction-controls.js';
 /** Pure authoring helpers shared by the graph and its form controls. */
 export function stepCaption(step) {
   if (step.kind === 'branch') return 'Branch by page';
@@ -32,7 +33,8 @@ export function setControlStates(pack, id, values) {
   step.requires = states; step.next = next; step.recoveryByState = recovery;
 }
 export function insertFlowStep(pack, kind, makeId = prefix => prefix + '-' + crypto.randomUUID().slice(0,8)) {
-  if (!['action','branch','repeat'].includes(kind)) throw Error('Choose an action, branch or repeat step.');
+  if (!['action','branch','repeat','extraction'].includes(kind)) throw Error('Choose an action, read value, branch or repeat step.');
+  const extraction = kind === 'extraction' ? newExtractionOperation(pack) : undefined;
   const state = Object.keys(pack.entryByState).find(id => pack.registry.states[id]?.actionable) || actionableStates(pack)[0];
   if (!state) throw Error('Add a recognized page before adding steps.');
   const id = makeId(kind), body = kind === 'repeat' ? makeId('body') : undefined;
@@ -46,6 +48,9 @@ export function insertFlowStep(pack, kind, makeId = prefix => prefix + '-' + cry
     if (count < 1) throw Error('Set the step visit limit to at least two before adding a repeat.');
     pack.steps[id] = {...common,kind,count,body,next:{[state]:previous}};
     pack.steps[body] = action(id);
+  } else if (kind === 'extraction') {
+    // A failed read must not recover directly into a consumer with no value.
+    pack.steps[id] = {...action(previous),do:extraction,recoveryByState:{[state]:review}};
   } else pack.steps[id] = kind === 'action' ? action(previous) : {...common,kind,next:{[state]:previous}};
   pack.entryByState[state] = id;
   return {id,body};

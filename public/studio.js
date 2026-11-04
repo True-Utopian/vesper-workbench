@@ -1,3 +1,4 @@
+import {extractionOperation,newExtractionOperation,valueChoices,authoredValue} from './extraction-controls.js';
 import {stepCaption,actionableStates,compatibleSteps,setControlStates,insertFlowStep,graphRoutes,arrangeFlow} from './flow-controls.js';
 const node = (tag,text,className) => { const x=document.createElement(tag);if(text!==undefined)x.textContent=text;if(className)x.className=className;return x; };
 const button = (text,fn,className='button outline small') => { const b=node('button',text,className);b.type='button';b.addEventListener('click',fn);return b; };
@@ -59,7 +60,7 @@ function renderGraph(){
  if(!documentState){stage.append(node('p','Choose a flow or import a bundle.','pane'));return;}
  const p=documentState.pack;if(selected&&!Object.hasOwn(p.steps,selected))selected=null;
  library.querySelector('.flow-title')?.remove();const title=field(library.querySelector('.library-toolbar'),'Flow title','text',p.title);title.parentElement.className='flow-title';title.addEventListener('change',()=>{remember();p.title=title.value;});
- const toolbar=graph.querySelector('.graph-toolbar')||node('div',undefined,'graph-toolbar');toolbar.setAttribute('aria-label','Add flow steps');toolbar.replaceChildren(button('Add action',()=>addEditorStep('action')),button('Branch by page',()=>addEditorStep('branch')),button('Repeat steps',()=>addEditorStep('repeat')),button('Flow settings',()=>{selected=null;renderGraph();}),button('Arrange flow',()=>{remember();positions=arrangeFlow(p);documentState.layout=positions;renderGraph();}));const recovery=node('label','Show recovery routes','graph-recovery-toggle'),recoveryInput=node('input');recoveryInput.type='checkbox';recoveryInput.checked=showRecoveryRoutes;recoveryInput.onchange=()=>{showRecoveryRoutes=recoveryInput.checked;renderGraph();graph.querySelector('.graph-recovery-toggle input')?.focus();};recovery.prepend(recoveryInput);toolbar.append(recovery);if(!toolbar.parentElement)graph.insertBefore(toolbar,stage);
+ const toolbar=graph.querySelector('.graph-toolbar')||node('div',undefined,'graph-toolbar');toolbar.setAttribute('aria-label','Add flow steps');toolbar.replaceChildren(button('Add action',()=>addEditorStep('action')),button('Read value',()=>addEditorStep('extraction')),button('Branch by page',()=>addEditorStep('branch')),button('Repeat steps',()=>addEditorStep('repeat')),button('Flow settings',()=>{selected=null;renderGraph();}),button('Arrange flow',()=>{remember();positions=arrangeFlow(p);documentState.layout=positions;renderGraph();}));const recovery=node('label','Show recovery routes','graph-recovery-toggle'),recoveryInput=node('input');recoveryInput.type='checkbox';recoveryInput.checked=showRecoveryRoutes;recoveryInput.onchange=()=>{showRecoveryRoutes=recoveryInput.checked;renderGraph();graph.querySelector('.graph-recovery-toggle input')?.focus();};recovery.prepend(recoveryInput);toolbar.append(recovery);if(!toolbar.parentElement)graph.insertBefore(toolbar,stage);
  const keys=Object.keys(p.steps),edges=document.createElementNS('http://www.w3.org/2000/svg','svg');edges.setAttribute('aria-hidden','true');stage.append(edges);
  for(const [index,id]of keys.entries()){
   positions[id]||={x:30+(index%3)*250,y:50+Math.floor(index/3)*150};const pos=positions[id],step=p.steps[id],b=button('',()=>{selected=id;renderInspector();for(const x of stage.querySelectorAll('.flow-node'))x.classList.toggle('selected',x.dataset.id===id);},'flow-node');b.dataset.id=id;b.dataset.kind=step.kind;b.style.left=pos.x+'px';b.style.top=pos.y+'px';b.classList.toggle('selected',selected===id);b.setAttribute('aria-label',stepCaption(step)+' ('+id+')');
@@ -77,7 +78,7 @@ function renderGraph(){
 function renderInspector(){inspector.replaceChildren();if(!documentState)return;const p=documentState.pack;inspector.append(node('h3',selected?stepCaption(p.steps[selected]):'Flow settings'));if(selected)inspector.append(node('small',selected,'subtle'));if(!selected){
  for(const [reference,value]of Object.entries(documentState.manifest.origins)){const address=field(inspector,Object.keys(documentState.manifest.origins).length===1?'Website address':'Website: '+reference,'url',value);address.readOnly=p.execution.profilePolicyId.startsWith('owned-fixture-');address.addEventListener('change',()=>{try{const url=new URL(address.value);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw new Error('Enter an HTTP or HTTPS website address without credentials.');mutate(()=>{documentState.manifest.origins[reference]=url.origin;});}catch(error){editor.setMessage(error.message,true);}});}
  const identity=panel('Advanced identity');const id=field(identity,'Flow ID','text',p.id),version=field(identity,'Version','text',p.version);id.addEventListener('change',()=>mutate(()=>{p.id=id.value;}));version.addEventListener('change',()=>mutate(()=>{p.version=version.value;}));
- renderFlowControls(p);inspector.append(button('Add action step',()=>addEditorStep('action')),button('Branch by page',()=>addEditorStep('branch')),button('Repeat steps',()=>addEditorStep('repeat')));}else{const step=p.steps[selected];const requires=field(inspector,'Required states','text',(step.requires||[]).join(', '));requires.addEventListener('change',()=>{const states=requires.value.split(',').map(x=>x.trim()).filter(Boolean);try{if(['branch','repeat'].includes(step.kind)){const candidate=structuredClone(p);setControlStates(candidate,selected,states);remember();documentState.pack=candidate;}else{remember();step.requires=states;}renderGraph();}catch(error){editor.setMessage(error.message,true);}});if(step.kind==='action'){const operation=field(inspector,'Action','select');for(const [op,title] of [['fill','Enter text'],['click','Click element'],['navigate','Open page'],['wait','Wait for page'],['scrape','Read value']])option(operation,op,title);operation.value=step.do.op;operation.addEventListener('change',()=>{remember();const target=Object.keys(p.registry.targets)[0];step.do=operation.value==='fill'?{op:'fill',target,value:{source:'input',key:'value'}}:operation.value==='click'?{op:'click',target,effect:'mutation'}:operation.value==='navigate'?{op:'navigate',originRef:p.start.originRef,pathname:p.start.pathname}:operation.value==='scrape'?{op:'scrape',target,read:{kind:'text'},outputKey:'result',sensitivity:'public',maxLength:1000}:{op:'wait'};renderInspector();});if(step.do.target){const target=field(inspector,'Target','select');for(const id of Object.keys(p.registry.targets))option(target,id,`${id}: ${p.registry.targets[id].selector}`);target.value=step.do.target;target.addEventListener('change',()=>{remember();step.do.target=target.value;});}if(step.do.value){const key=field(inspector,'Input field','text',step.do.value.key||'');key.addEventListener('change',()=>{remember();step.do.value={source:'input',key:key.value};});}for(const [state,to]of Object.entries(step.next||{})){const next=field(inspector,'Next when '+state,'select');for(const id of Object.keys(p.steps))option(next,id);next.value=to;next.addEventListener('change',()=>{remember();step.next[state]=next.value;renderGraph();});}}renderStepControls(p,step);const advancedStep=node('details');advancedStep.append(node('summary','Advanced: step definition'));const raw=field(advancedStep,'Step definition','textarea',JSON.stringify(step,null,2));advancedStep.append(button('Apply definition',()=>{try{const value=JSON.parse(raw.value);remember();p.steps[selected]=value;renderGraph();}catch(error){editor.setMessage(error.message,true);}}));inspector.append(advancedStep,button('Flow settings',()=>{selected=null;renderGraph();}));}const details=node('details'),summary=node('summary','Advanced: full bundle');const json=field(details,'Pack and bindings','textarea',JSON.stringify({pack:p,manifest:documentState.manifest},null,2));details.prepend(summary);details.append(button('Apply bundle',()=>{try{const value=JSON.parse(json.value);remember();documentState={...documentState,...value};renderGraph();}catch(error){editor.setMessage(error.message,true);}}));inspector.append(details);}
+ renderFlowControls(p);inspector.append(button('Add action step',()=>addEditorStep('action')),button('Read value',()=>addEditorStep('extraction')),button('Branch by page',()=>addEditorStep('branch')),button('Repeat steps',()=>addEditorStep('repeat')));}else{const step=p.steps[selected];const requires=field(inspector,'Required states','text',(step.requires||[]).join(', '));requires.addEventListener('change',()=>{const states=requires.value.split(',').map(x=>x.trim()).filter(Boolean);try{if(['branch','repeat'].includes(step.kind)){const candidate=structuredClone(p);setControlStates(candidate,selected,states);remember();documentState.pack=candidate;}else{remember();step.requires=states;}renderGraph();}catch(error){editor.setMessage(error.message,true);}});if(step.kind==='action')renderActionControls(p,step);renderStepControls(p,step);const advancedStep=node('details');advancedStep.append(node('summary','Advanced: step definition'));const raw=field(advancedStep,'Step definition','textarea',JSON.stringify(step,null,2));advancedStep.append(button('Apply definition',()=>{try{const value=JSON.parse(raw.value);remember();p.steps[selected]=value;renderGraph();}catch(error){editor.setMessage(error.message,true);}}));inspector.append(advancedStep,button('Flow settings',()=>{selected=null;renderGraph();}));}const details=node('details'),summary=node('summary','Advanced: full bundle');const json=field(details,'Pack and bindings','textarea',JSON.stringify({pack:p,manifest:documentState.manifest},null,2));details.prepend(summary);details.append(button('Apply bundle',()=>{try{const value=JSON.parse(json.value);remember();documentState={...documentState,...value};renderGraph();}catch(error){editor.setMessage(error.message,true);}}));inspector.append(details);}
 function setEditorBusy(value){editorBusy=value;editor.body.inert=value;editor.footer.inert=value;save.disabled=value||!documentState;publish.disabled=value||!documentState;}
 async function saveDraft(publishAfter=false){
  if(editorBusy)return;
@@ -123,7 +124,6 @@ function renderStepControls(p,step){
   const outcomes=field(inspector,'Expected states after action','text',step.postcondition.states.join(', '));outcomes.onchange=()=>mutate(()=>{step.postcondition.states=outcomes.value.split(',').map(x=>x.trim()).filter(Boolean);for(const state of step.postcondition.states)step.next[state]||=p.onUnexpectedStep;});
   if(step.do.op==='navigate'){const pathname=field(inspector,'Navigate to path','text',step.do.pathname);pathname.onchange=()=>mutate(()=>{step.do.pathname=pathname.value;});}
   if(step.do.op==='click'){const effect=field(inspector,'Click effect','select');option(effect,'mutation','Changes this page');option(effect,'navigation','Opens another page');effect.value=step.do.effect;effect.onchange=()=>mutate(()=>{step.do.effect=effect.value;});}
-  if(step.do.op==='scrape'){const output=field(inspector,'Output key','text',step.do.outputKey);output.onchange=()=>mutate(()=>{step.do.outputKey=output.value;});}
  }
  const routes=step.kind==='review'?step.recoveryByState:undefined;if(routes)for(const [state,to]of Object.entries(routes)){const input=field(inspector,'Recover from '+state,'select');for(const id of Object.keys(p.steps))option(input,id);input.value=to;input.onchange=()=>mutate(()=>{routes[state]=input.value;});}
  const referenced=Object.values(p.entryByState).includes(selected)||p.onUnexpectedStep===selected||Object.entries(p.steps).some(([id,s])=>id!==selected&&[...Object.values(s.next||{}),...Object.values(s.recoveryByState||{}),s.kind==='repeat'?s.body:undefined,s.onError,s.onTimeout,s.onUncertain].includes(selected));
@@ -139,4 +139,69 @@ function renderControlStep(p,step){
  const routes=node('section',undefined,'control-routes');routes.append(node('h4',step.kind==='repeat'?'After repeating':'Page routes'));
  for(const state of step.requires){const next=field(routes,'When '+(p.registry.states[state]?.title||state),'select');for(const id of compatibleSteps(p,state))option(next,id,stepCaption(p.steps[id])+' · '+id);next.value=step.next[state]||'';next.onchange=()=>mutate(()=>{step.next[state]=next.value;});}inspector.append(routes);
  const available=actionableStates(p).filter(state=>!step.requires.includes(state));if(available.length&&step.kind==='branch'){const state=field(inspector,'Add page route','select');for(const id of available)option(state,id,p.registry.states[id].title);inspector.append(button('Add route',()=>{try{const candidate=structuredClone(p);setControlStates(candidate,selected,[...step.requires,state.value]);remember();documentState.pack=candidate;renderGraph();}catch(error){editor.setMessage(error.message,true);}}));}
+}
+
+function editExtraction(p,step,patch){
+ try{const operation=extractionOperation(p,step.do,patch);mutate(()=>{step.do=operation;});}catch(error){editor.setMessage(error.message,true);}
+}
+function renderActionControls(p,step){
+ const operation=field(inspector,'Action','select');
+ for(const [op,title] of [['fill','Enter text'],['click','Click element'],['navigate','Open page'],['wait','Wait for page'],['scrape','Read value']])option(operation,op,title);
+ operation.value=step.do.op;
+ operation.onchange=()=>{try{
+  const target=Object.keys(p.registry.targets).find(id=>p.registry.targets[id].cardinality==='one');
+  if(['fill','click'].includes(operation.value)&&!target)throw Error('Add a page target that identifies exactly one element first.');
+  const input=valueChoices(p,'input',selected)[0];
+  const next=operation.value==='fill'?{op:'fill',target,value:input?{source:'input',key:input.key}:{source:'literal',value:''}}:
+   operation.value==='click'?{op:'click',target,effect:'mutation'}:
+   operation.value==='navigate'?{op:'navigate',originRef:p.start.originRef,pathname:p.start.pathname}:
+   operation.value==='scrape'?newExtractionOperation(p):{op:'wait'};
+  mutate(()=>{step.do=next;if(next.op==='scrape')for(const state of step.requires)step.recoveryByState[state]=p.onUnexpectedStep;});
+ }catch(error){operation.value=step.do.op;editor.setMessage(error.message,true);}};
+ if(step.do.target){
+  const target=field(inspector,'Target','select');
+  for(const id of Object.keys(p.registry.targets).filter(id=>p.registry.targets[id].cardinality==='one'))option(target,id,id+': '+p.registry.targets[id].selector);
+  if(!Array.from(target.options).some(value=>value.value===step.do.target))option(target,step.do.target,'Missing or non-unique target: '+step.do.target);
+  target.value=step.do.target;target.onchange=()=>step.do.op==='scrape'?editExtraction(p,step,{target:target.value}):mutate(()=>{step.do.target=target.value;});
+ }
+ if(step.do.op==='scrape')renderExtractionControls(p,step);
+ if(step.do.value)renderValueControls(p,step);
+ for(const [state,to]of Object.entries(step.next||{})){
+  const next=field(inspector,'Next when '+state,'select');for(const id of Object.keys(p.steps))option(next,id);next.value=to;
+  next.onchange=()=>mutate(()=>{step.next[state]=next.value;});
+ }
+}
+function renderExtractionControls(p,step){
+ const section=node('section',undefined,'extraction-controls');section.append(node('h4','Read one page value'));
+ section.append(node('p','Choose one element. Duplicate matches, missing attributes and values over the limit stop this action and follow its review route.','subtle'));
+ const read=field(section,'Read from','select');option(read,'text','Element text');option(read,'attribute','Element attribute');read.value=step.do.read.kind;
+ read.onchange=()=>editExtraction(p,step,{read:read.value==='text'?{kind:'text'}:{kind:'attribute',name:'data-reference'}});
+ if(step.do.read.kind==='attribute'){
+  const name=field(section,'Attribute name','text',step.do.read.name);name.placeholder='data-reference';name.maxLength=256;
+  name.onchange=()=>editExtraction(p,step,{read:{kind:'attribute',name:name.value}});
+  section.append(node('p','Use an existing data-* or aria-* attribute. Arbitrary attributes and JavaScript are unavailable.','subtle'));
+ }
+ const key=field(section,'Value name','text',step.do.outputKey);key.maxLength=64;key.onchange=()=>editExtraction(p,step,{outputKey:key.value});
+ const limit=field(section,'Character limit','number',String(step.do.maxLength));limit.min='1';limit.max='4096';limit.step='1';
+ limit.onchange=()=>editExtraction(p,step,{maxLength:limit.value.trim()?Number(limit.value):NaN});
+ const privacy=field(section,'Value privacy','select');option(privacy,'sensitive','Sensitive');option(privacy,'public','Public');privacy.value=step.do.sensitivity;
+ privacy.onchange=()=>editExtraction(p,step,{sensitivity:privacy.value});
+ section.append(node('p','Reuse this value in a later Enter text action. Values stay in run memory; neither privacy setting writes them to flow history or the editor. A saved browser profile can retain website data.','subtle'));
+ inspector.append(section);
+}
+function renderValueControls(p,step){
+ const source=field(inspector,'Value source','select');
+ for(const [id,title]of [['input','Automation input'],['capture','Read value'],['answer','Text answer'],['literal','Fixed text']])option(source,id,title);
+ source.value=step.do.value.source;
+ const update=(kind,value)=>{try{const reference=authoredValue(p,selected,kind,value);mutate(()=>{step.do.value=reference;});}catch(error){editor.setMessage(error.message,true);}};
+ source.onchange=()=>{if(source.value==='literal'){update('literal','');return;}const first=valueChoices(p,source.value,selected)[0];if(!first){source.value=step.do.value.source;editor.setMessage('Add a matching input, Read value or text-answer step first.',true);return;}update(source.value,first.key);};
+ if(step.do.value.source==='literal'){
+  const literal=field(inspector,'Fixed text','textarea',step.do.value.value);literal.maxLength=500;literal.onchange=()=>update('literal',literal.value);
+ }else{
+  const labels={input:'Input field',capture:'Read value name',answer:'Text answer'},kind=step.do.value.source,choice=field(inspector,labels[kind]||'Value','select');
+  const choices=valueChoices(p,kind,selected);for(const item of choices)option(choice,item.key,item.title);
+  if(!choices.some(item=>item.key===step.do.value.key))option(choice,step.do.value.key,'Missing value: '+step.do.value.key);
+  choice.value=step.do.value.key;choice.onchange=()=>update(kind,choice.value);
+  if(kind==='capture')inspector.append(node('p','Save draft checks that every route reads this value before using it. Rename a read value only after updating its consumers.','subtle'));
+ }
 }
