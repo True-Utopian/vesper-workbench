@@ -25,6 +25,7 @@ import { AdmissionJournal, documentationAsset, documentationContext, versionedDo
 import { Scheduler } from './scheduler.js';
 import { calendarOccurrences } from './calendar.js';
 import { FlowLibrary, type FlowPublisher } from './flow-library.js';
+import { RunEventJournal, type RunEvent } from './run-events.js';
 import type { FlowPack, FlowManifest } from './flows/types.js';
 
 // The interface makes API tests independent of a running, licensed engine.
@@ -82,6 +83,19 @@ export async function createServer(config: Config, runtime: WorkbenchRuntime, pr
   const assets = await prepareAssets(path.join(root, 'public'), path.join(config.dataDir, 'assets'));
   const viewers = new Map<WebSocket, { id: string; session?: string; bearer?: string }>();
   const streams = new Map<ServerResponse, { session?: string; close: () => void }>();
+  const eventJournal = new RunEventJournal(path.join(config.dataDir, 'run-events.json'));
+  const seenAtStartup = new Set<string>();
+  let reconcilingEvents = true;
+  const recordRun = (run: any) => { if (reconcilingEvents) seenAtStartup.add(run?.id); void eventJournal.append(run).catch(() => {}); };
+  try {
+    await eventJournal.init();
+    runtime.on('run', recordRun);
+    // Reconcile canonical state after an unclean exit without replaying actions.
+    for (const run of runtime.list()) if (!seenAtStartup.has(run.id)) await eventJournal.append(run);
+    await eventJournal.flush();
+  } catch (error) { runtime.off('run', recordRun); await scheduler.close(); throw error; }
+  reconcilingEvents = false; seenAtStartup.clear();
+  app.addHook('onClose', async () => { runtime.off('run', recordRun); await eventJournal.drain(); });
   await app.register(cookie);
   if (config.enableTestFixture) await registerFixture(app, config.token);
   await app.register(websocket, { options: { maxPayload: 2 * 1024 * 1024 } });
@@ -273,7 +287,12 @@ export async function createServer(config: Config, runtime: WorkbenchRuntime, pr
     if (!proxies.check) throw httpError(501, 'This provider does not support an on-demand check.');
     return proxies.check(request.params.id);
   });
-  app.get('/api/events', (request, reply) => {
+  app.get('/api/events', { schema: { summary: 'Stream committed run updates with bounded durable replay', description: 'Reconnect with Last-Event-ID. A reset event requires a fresh GET /api/v1/runs. Replay sends notifications only and never repeats automation actions.', headers: { type: 'object', properties: { 'last-event-id': { type: 'string', maxLength: 53 } } } } }, (request, reply) => {
+    const cursor = request.headers['last-event-id'];
+    if (cursor !== undefined && typeof cursor !== 'string') throw httpError(400, 'Invalid event cursor.');
+    // No await between replay capture and listener attachment: a commit belongs
+    // to either the saved replay or the live listener, never neither/both.
+    const replay = eventJournal.replay(cursor);
     reply.hijack();
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     reply.raw.write(': connected\n\n');
@@ -282,20 +301,24 @@ export async function createServer(config: Config, runtime: WorkbenchRuntime, pr
       if (cleaned) return;
       cleaned = true;
       clearInterval(timer);
-      runtime.off('run', onRun);
+      eventJournal.off('commit', onRun);
+      eventJournal.off('unavailable', close);
       streams.delete(reply.raw);
     };
     const close = () => { cleanup(); if (!reply.raw.writableEnded) reply.raw.end(); };
     const write = (data: string) => {
-      if (reply.raw.destroyed || reply.raw.writableEnded || !authenticate(request) || reply.raw.writableLength + Buffer.byteLength(data) > 1024 * 1024) { close(); return; }
+      if (reply.raw.destroyed || reply.raw.writableEnded || !authenticate(request) || reply.raw.writableLength + Buffer.byteLength(data) > 2 * 1024 * 1024) { close(); return; }
       reply.raw.write(data);
     };
-    const onRun = (run: unknown) => write(`event: run\ndata: ${JSON.stringify(run)}\n\n`);
-    runtime.on('run', onRun);
+    const onRun = (event: RunEvent) => write(`id: ${eventJournal.id(event)}\nevent: run\ndata: ${event.data}\n\n`);
+    eventJournal.on('commit', onRun);
+    eventJournal.on('unavailable', close);
     const timer = setInterval(() => write(': heartbeat\n\n'), 15000);
     timer.unref();
     streams.set(reply.raw, { session: request.cookies.workbench, close });
     reply.raw.on('close', cleanup);
+    if (replay.reset) write(`id: ${replay.cursor}\nevent: reset\ndata: {"reason":"refresh-required","runs":"/api/v1/runs"}\n\n`);
+    else for (const event of replay.events) { if (cleaned) break; onRun(event); }
   });
   app.get<{ Params: { id: string } }>('/api/runs/:id/view', async request => {
     const run = getRun(request.params.id);

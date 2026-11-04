@@ -175,7 +175,7 @@ test('logout immediately closes the cookie-authenticated SSE stream and removes 
     const events = await fetch(`${url}/api/events`, { headers: { cookie }, signal: controller.signal });
     const reader = events.body!.getReader();
     assert.equal((await deadline(reader.read())).done, false);
-    assert.equal(f.runtime.listenerCount('run'), baseline + 1);
+    assert.equal(f.runtime.listenerCount('run'), baseline, 'Streams subscribe to committed history, not directly to runtime actions');
     const logout = await fetch(`${url}/api/logout`, { method: 'POST', headers: { cookie } });
     await logout.arrayBuffer();
     assert.equal(logout.status, 200);

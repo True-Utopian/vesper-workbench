@@ -97,7 +97,7 @@ try {
   let dispatchPort;
   if (args.includes('--dispatch') && process.platform === 'linux') {
     dispatchPort = await unusedPort(); const handler = join(output, 'docs-default-browser.py');
-    const command = [join(dirname(executable), 'resources/vesper-kernel/chrome'), '--user-data-dir=' + join(output, 'docs-browser-data'), '--remote-debugging-port=' + dispatchPort, '--remote-debugging-address=127.0.0.1', '--disable-gpu', '--no-first-run', '--no-default-browser-check'];
+    const command = [join(dirname(executable), 'resources/vesper-kernel/chrome'), '--user-data-dir=' + join(output, 'docs-browser-data'), '--remote-debugging-port=' + dispatchPort, '--remote-debugging-address=127.0.0.1', '--disable-gpu', '--disable-component-update', '--disable-background-networking', '--no-first-run', '--no-default-browser-check'];
     await writeFile(handler, '#!/usr/bin/python3\nimport sys,subprocess\nfrom urllib.parse import urlparse\nu=sys.argv[-1];p=urlparse(u)\nassert p.scheme=="http" and p.hostname=="127.0.0.1" and p.path=="/docs" and not p.query and not p.username\nlog=open(' + JSON.stringify(join(output, 'default-browser.log')) + ',"a")\nsubprocess.Popen(' + JSON.stringify(command) + '+[u],stdout=log,stderr=subprocess.STDOUT,start_new_session=True)\n', { mode: 0o700 });
     env.BROWSER = handler; env.XDG_CURRENT_DESKTOP = ''; env.DESKTOP_SESSION = '';
   }

@@ -2,7 +2,8 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, stat, open } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, open } from "node:fs/promises";
+import { atomicRename } from "@true-utopian/vesper-browser";
 import { join, posix, resolve, win32 } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { NodeDatabase } from '../coordinator/local-database.js';
@@ -1028,7 +1029,7 @@ export class ManagedRuntime extends EventEmitter {
       } finally {
         await handle.close();
       }
-      await rename(localTemporary, localFinal);
+      await atomicRename(localTemporary, localFinal);
       const profile = await this.coordinator.getProfile(
         this.options.tenantId,
         session.grant.profileId,

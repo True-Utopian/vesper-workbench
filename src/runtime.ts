@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID, createHash } from 'node:crypto';
-import { readdir, mkdir, readFile, writeFile, rename, stat, rm } from 'node:fs/promises';
+import { readdir, mkdir, readFile, stat, rm } from 'node:fs/promises';
+import { atomicRename, durableWrite } from '@true-utopian/vesper-browser';
 import { createReadStream } from 'node:fs';
 import { join, resolve, posix, win32 } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -248,7 +249,7 @@ export class Runtime extends EventEmitter {
       await this.abortable(this.engine.export(record.profileId, engineJoin(this.options.engineExportDir, temporary)), AbortSignal.timeout(this.options.exportTimeoutMs ?? 120_000), async () => { await rm(localTemporary, { force: true }); });
       const info = await stat(localTemporary); if (!info.isFile() || info.size === 0) throw new Error('Export file is missing or empty');
       const hash = createHash('sha256'); for await (const chunk of createReadStream(localTemporary)) hash.update(chunk);
-      await rename(localTemporary, localFinal);
+      await atomicRename(localTemporary, localFinal);
       record.artifact = { name, path: resolve(localFinal), bytes: info.size, sha256: hash.digest('hex') };
       await this.engine.releaseProfile?.(record.profileId);
       record.state = 'saved'; record.timings.savedAt = Date.now(); await this.changed(id);
@@ -355,7 +356,7 @@ export class Runtime extends EventEmitter {
   private async changed(id: string) { const record = this.records.get(id)!; record.updatedAt = now(); this.emit('run', copy(record)); await this.persist(id); }
   private persist(id?: string): Promise<void> {
     const snapshots = (id ? [this.records.get(id)!] : [...this.records.values()]).map(copy);
-    this.persistence = this.persistence.catch(() => {}).then(async () => { for (const record of snapshots) { const file = join(this.options.dataDir, `run-${record.id}.json`); await writeFile(`${file}.tmp`, JSON.stringify(record, null, 2), { mode: 0o600 }); await rename(`${file}.tmp`, file); } });
+    this.persistence = this.persistence.catch(() => {}).then(async () => { for (const record of snapshots) { const file = join(this.options.dataDir, `run-${record.id}.json`); await durableWrite(file, JSON.stringify(record, null, 2)); } });
     return this.persistence;
   }
   async close(): Promise<void> {
