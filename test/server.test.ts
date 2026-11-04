@@ -137,6 +137,25 @@ test('versioned Workbench API documents routes and replays run admission without
   } finally { await f.close(); }
 });
 
+test('offline handbook serves only its generated public manifest while APIs remain authenticated', async () => {
+  const f = await fixture();
+  try {
+    const manifestResponse = await f.app.inject({ url: '/docs/handbook/offline-manifest.json' });
+    assert.equal(manifestResponse.statusCode, 200);
+    const manifest = manifestResponse.json(); assert.equal(manifest.files.length, 26);
+    for (const file of manifest.files) {
+      const response = await f.app.inject({ url: '/docs/handbook/' + file });
+      assert.equal(response.statusCode, 200, file);
+      if (file.endsWith('.png')) assert.equal(response.headers['content-type'], 'image/png');
+      assert.ok(!response.body.includes(token));
+      assert.ok(response.headers['content-security-policy']?.includes("script-src 'self'"));
+    }
+    for (const path of ['admin-token', 'wiki/private.html', 'wiki/%2e%2e%2fadmin-token', 'assets/secrets.json']) assert.equal((await f.app.inject({url:'/docs/handbook/'+path})).statusCode,404,path);
+    assert.equal((await f.app.inject({ url: '/api/v1/runs' })).statusCode, 401);
+    assert.equal(f.runtime.submissions, 0);
+  } finally { await f.close(); }
+});
+
 async function deadline<T>(operation: Promise<T>, milliseconds = 1500): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {

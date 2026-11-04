@@ -13,12 +13,15 @@ const args = process.argv.slice(2), option = name => { const i = args.indexOf(na
 assert.ok(option('--executable') && option('--output'), 'Provide --executable and a private --output directory');
 const executable = await realpath(resolve(option('--executable'))), actual = args.includes('--actual'), standalone = args.includes('--standalone');
 const packagedIntegration = args.includes('--packaged-integration');
+assert.ok(!packagedIntegration || /^[a-f0-9]{64}$/.test(option('--kernel-sha') || ''), 'Packaged integration requires --kernel-sha for the exact expected qualified kernel');
 assert.ok(!packagedIntegration || !actual, 'Packaged integration uses an owned fixture; actual installations use --integration');
 await mkdir(resolve(option('--output')), { recursive: true }); const output = await realpath(resolve(option('--output')));
 assert.ok(!option('--data-root') || actual, 'Explicit user stores require --actual; owned fixtures use a new private temporary store');
 assert.ok(!standalone || !actual, 'Standalone qualification uses a new owned fixture');
 assert.ok(!args.includes('--default-store') || actual, 'Default-store qualification requires the actual installed application and its explicit expected data root');
-const data = await realpath(actual ? resolve(option('--data-root')) : await mkdtemp(join(tmpdir(), 'vesper-desktop-docs-')));
+const fixtureRoot = resolve(option('--fixture-root') || join(resolve(import.meta.dirname, '..'), '.workbench/desktop-docs-fixtures'));
+await mkdir(fixtureRoot, { recursive: true });
+const data = await realpath(actual ? resolve(option('--data-root')) : await mkdtemp(join(fixtureRoot, 'vesper-desktop-docs-')));
 const root = resolve(import.meta.dirname, '..'), json = async file => JSON.parse((await readFile(file, 'utf8')).replace(/^\uFEFF/, ''));
 const versions = { browser: (await json(join(root, 'packages/vesper-browser/package.json'))).version, workbench: (await json(join(root, 'package.json'))).version };
 const report = { at: new Date().toISOString(), state: 'running', platform: process.platform, versions, actualInstalledProof: actual, standalone, dataRoot: data, checks: [], screenshots: [], errors: [], visualReviewPassed: false };
@@ -74,7 +77,8 @@ async function quit() {
 }
 async function screenshot(page, name) { const path = join(output, name + '.png'); await page.screenshot({ path, scale: 'css' }); report.screenshots.push(path); }
 try {
-  if (process.platform === 'win32') {
+  {
+    // Both packaged operating systems share the ASAR and signed add-on contract.
     const product = JSON.parse(await readAsarText(dirname(executable), 'desktop/product.json'));
     assert.equal(product.product, standalone ? 'workbench' : 'browser'); assert.equal(product.version, standalone ? versions.workbench : versions.browser);
     if (!actual && !standalone) {
@@ -213,7 +217,25 @@ try {
     await screenshot(docs, kind + '-overview'); await docs.getByLabel('Find an endpoint or guide').fill(kind === 'browser' ? 'profiles' : 'automations'); await docs.getByLabel('HTTP method').selectOption('GET');
     await docs.getByRole('link', { name: 'GET /' + (kind === 'browser' ? 'profiles' : 'automations'), exact: true }).click();
     for (const language of ['TypeScript', 'Python']) { await docs.getByLabel('Example language').selectOption(language); await writeFile(join(examples, kind + '-get.' + (language === 'Python' ? 'py' : 'ts')), await docs.locator('.reference-columns>section:last-child pre').innerText()); }
+    await docs.getByRole('link', { name: 'Full handbook', exact: true }).click();
+    await docs.getByRole('heading', { name: 'The Vesper handbook', exact: true }).waitFor();
+    assert.equal(await docs.locator('[data-topic]').count(), 13); await screenshot(docs, kind + '-full-handbook');
+    for (const [guide, filename] of [['Install on Windows or Linux', 'guide-browser-profiles.png'], ['Your first Browser and Workbench run', 'guide-workbench.png']]) {
+      await docs.getByRole('link', { name: guide, exact: true }).click();
+      const image = docs.locator('article.guide img'); await image.scrollIntoViewIfNeeded();
+      await docs.waitForFunction(() => [...document.querySelectorAll('article.guide img')].every(img => img.complete && img.naturalWidth > 0));
+      assert.ok((await image.getAttribute('src')).endsWith(filename)); await screenshot(docs, kind + '-' + filename.replace('.png', ''));
+      assert.equal(await docs.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    }
+    await docs.getByRole('link', { name: 'Archives and extensions', exact: true }).click();
+    const sample = docs.locator('article.guide section').filter({ has: docs.getByRole('heading', { name: 'Restore with the TypeScript client', exact: true }) });
+    await writeFile(join(examples, kind + '-restore.ts'), await sample.locator('pre').innerText());
+    await sample.scrollIntoViewIfNeeded(); await screenshot(docs, kind + '-archive-restore-guide');
+    await docs.setViewportSize({ width: 390, height: 844 }); await screenshot(docs, kind + '-handbook-mobile');
+    assert.equal(await docs.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await docs.getByRole('link', { name: 'API Docs', exact: true }).click(); await docs.setViewportSize({ width: 1380, height: 860 });
   }
+  report.checks.push('Full handbook navigation, archive restore recipe, SDK snippet capture, API Docs return and narrow layout pass in both services with external requests blocked');
   await docs.getByLabel('Find an endpoint or guide').fill('schedules/preview'); await docs.getByLabel('HTTP method').selectOption('POST'); await docs.getByRole('link', { name: 'POST /schedules/preview', exact: true }).click();
   await docs.getByLabel('Example language').selectOption('Python'); await writeFile(join(examples, 'workbench-preview.py'), await docs.locator('.reference-columns>section:last-child pre').innerText()); await screenshot(docs, 'calendar-preview');
   await docs.getByLabel('Find an endpoint or guide').fill('no-such-endpoint-qa'); await docs.getByText('No matches.', { exact: false }).waitFor(); await docs.getByLabel('Find an endpoint or guide').fill(''); await docs.getByLabel('HTTP method').selectOption('');

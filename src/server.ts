@@ -114,6 +114,11 @@ export async function createServer(config: Config, runtime: WorkbenchRuntime, pr
   });
   app.get('/docs/context.json', async () => documentationContext('Workbench', vesperWorkbenchVersion, config.vesperBrowserUrl));
   app.get('/docs/openapi.json', async () => versionedDocumentationContract(app.swagger()));
+  app.get<{ Params: { '*': string } }>('/docs/handbook/*', async (request, reply) => {
+    const asset = await documentationAsset('/docs/handbook/' + request.params['*']);
+    if (!asset) return reply.code(404).send({ error: 'Documentation asset not found' });
+    return reply.header('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'").type(asset.type).send(asset.body);
+  });
   app.get<{ Params: { file: string } }>('/docs/:file', async (request, reply) => {
     const asset = await documentationAsset('/docs/' + request.params.file);
     if (!asset) throw httpError(404, 'Documentation page not found.');
