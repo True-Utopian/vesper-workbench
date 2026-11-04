@@ -8,6 +8,7 @@ import {
   type SqlExecutor,
   type WorkspaceConfig,
   type SubmitFlow,
+  type PackReference,
   type FlowRecord,
   type LeaseGrant,
   type LifecycleOperation,
@@ -300,6 +301,25 @@ export class DurableCoordinator {
       );
     });
   }
+  private async registerPack(tx: SqlExecutor, input: { tenantId: string; siteId: string; pack: PackReference }) {
+    const pack = await one(tx,
+      `INSERT INTO site_pack_versions(tenant_id,id,site_id,pack_key,version,content_sha256,artifact_key)
+       VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,pack_key,version) DO UPDATE SET pack_key=EXCLUDED.pack_key RETURNING *`,
+      [input.tenantId, randomUUID(), input.siteId, input.pack.key, input.pack.version, digest(input.pack.hash), input.pack.artifactKey]);
+    if (pack!.site_id !== input.siteId || Buffer.from(pack!.content_sha256).toString('hex') !== input.pack.hash.toLowerCase())
+      error('Pack versions are immutable', 'pack_version_conflict');
+    return pack!;
+  }
+  // Publication reserves the same immutable identity as admission, without
+  // creating a run, allocating a profile or charging browser capacity.
+  async registerPackVersion(input: { tenantId: string; siteId: string; pack: PackReference }) {
+    await this.tx(async tx => { await this.registerPack(tx, input); });
+  }
+  async packVersions(tenantId: string, key: string): Promise<Array<{ version: string; hash: string; siteId: string }>> {
+    return this.tx(async tx => (await tx.query<Row>(
+      'SELECT version,content_sha256,site_id FROM site_pack_versions WHERE tenant_id=$1 AND pack_key=$2', [tenantId, key],
+    )).rows.map(row => ({ version: row.version, hash: Buffer.from(row.content_sha256).toString('hex'), siteId: row.site_id })));
+  }
   async submitFlow(input: SubmitFlow): Promise<FlowRecord> {
     const id = input.flowId ?? randomUUID();
     await this.tx(async (tx) => {
@@ -330,26 +350,7 @@ export class DurableCoordinator {
           "node_not_found",
           404,
         );
-      const pack = await one(
-        tx,
-        `INSERT INTO site_pack_versions(tenant_id,id,site_id,pack_key,version,content_sha256,artifact_key)
-        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,pack_key,version) DO UPDATE SET pack_key=EXCLUDED.pack_key RETURNING *`,
-        [
-          input.tenantId,
-          randomUUID(),
-          input.siteId,
-          input.pack.key,
-          input.pack.version,
-          digest(input.pack.hash),
-          input.pack.artifactKey,
-        ],
-      );
-      if (
-        pack!.site_id !== input.siteId ||
-        Buffer.from(pack!.content_sha256).toString("hex") !==
-          input.pack.hash.toLowerCase()
-      )
-        error("Pack versions are immutable", "pack_version_conflict");
+      const pack = await this.registerPack(tx, input);
       let binding: Row | undefined;
       let profileId = randomUUID();
       if (input.identityId) {
@@ -2537,7 +2538,7 @@ export class DurableCoordinator {
       );
     });
   }
-  async stats(quotaDomainId: string): Promise<CoordinatorStats> {
+  async stats(quotaDomainId: string, unregisteredBudget?: number): Promise<CoordinatorStats> {
     return this.tx(async (tx) => {
       const r = await one(
         tx,
@@ -2551,6 +2552,12 @@ export class DurableCoordinator {
       FROM quota_domains d WHERE d.id=$1`,
         [quotaDomainId],
       );
+      if (!r && unregisteredBudget !== undefined) {
+        if (!Number.isSafeInteger(unregisteredBudget) || unregisteredBudget < 1) throw new Error("Invalid unregistered workspace budget");
+        // A new local library has no origin/workspace until its first flow is
+        // published. Report that empty state without creating a quota domain.
+        return {chargedBrowsers:0,chargedMobile:0,heldProfiles:0,quarantinedLeases:0,queuedFlows:0,pendingOperations:0,totalBrowserBudget:unregisteredBudget,mobileBrowserBudget:0,startsBlockedUntil:null};
+      }
       if (!r) error("Quota domain not found", "quota_domain_not_found", 404);
       return {
         chargedBrowsers: number(r!.charged),

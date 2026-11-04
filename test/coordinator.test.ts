@@ -95,6 +95,13 @@ async function fixture(total = 2) {
   };
   return { db, c: coordinator, config, submit, op, stop };
 }
+test('an unpublished local library can read empty capacity without registering or replacing a quota',async()=>{
+  const db=new MemoryPostgres(),coordinator=new DurableCoordinator({db});await coordinator.migrate();const id=randomUUID();
+  try{const empty=await coordinator.stats(id,3);assert.equal(empty.totalBrowserBudget,3);assert.equal(empty.chargedBrowsers,0);assert.equal(empty.heldProfiles,0);await assert.rejects(coordinator.stats(id),/Quota domain not found/);await assert.rejects(coordinator.stats(id,0),/Invalid unregistered/);}
+  finally{await coordinator.close();}
+  const existing=await fixture(1);try{assert.equal((await existing.c.stats(existing.config.quotaDomainId,9)).totalBrowserBudget,1);}finally{await existing.c.close();}
+});
+
 test("durable admission preserves charged capacity and profile exclusivity after expiry", async () => {
   const f = await fixture(1);
   try {

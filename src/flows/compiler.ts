@@ -309,7 +309,15 @@ export function compileFlow(
       if (steps[step[branch]]?.kind !== "review")
         error(`${id}: failure route must review`);
     }
-    if (step.kind === "input") {
+    if (step.kind === "branch" || step.kind === "repeat") {
+      routes(id, step.next, "success", step.requires);
+      if (step.kind === "repeat") {
+        edge(id, step.body, "success");
+        if (step.body === id) error(`${id}: repeat body must contain another step`);
+        if (steps[step.body] && !step.requires.every(state => steps[step.body]!.requires.includes(state))) error(`${id}: repeat body does not accept every required state`);
+        if (step.count + 1 > pack.limits.maxStateVisits) error(`${id}: repeat count needs a visit limit of at least ${step.count + 1}`);
+      }
+    } else if (step.kind === "input") {
       routes(id, step.next, "success", step.requires);
       if (step.input.kind === "choice")
         choice(step.input.choiceSource, id, step.requires);
@@ -347,6 +355,22 @@ export function compileFlow(
       )
         error(`${id}: reconciliation resolver is not installed`);
     }
+  }
+  // A normal body must return to its controller before reaching completion.
+  // Recovery/review edges remain separate and never authorize an automatic retry.
+  for (const [id, step] of Object.entries(steps)) {
+    if (step.kind !== "repeat") continue;
+    const seen = new Set<string>(), pending = [step.body]; let returns = false;
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (current === id) {returns = true; continue;}
+      if (seen.has(current) || !hasStep(current)) continue;
+      seen.add(current);
+      if (steps[current]!.kind === "complete") error(`${id}: repeat body reaches completion before returning to its controller`);
+      for (const route of edges.filter(edge => edge.from === current && edge.kind === "success")) pending.push(route.to);
+    }
+    if (!returns) error(`${id}: repeat body has no return route to its controller`);
+    if (Object.values(step.next).some(to => to === id || seen.has(to))) error(`${id}: repeat exit must leave its body and controller`);
   }
   const reached = new Set([...seeds].filter(hasStep));
   const pending = [...reached];

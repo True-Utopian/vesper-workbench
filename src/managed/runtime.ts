@@ -18,6 +18,7 @@ import {
   type OperationKind,
 } from "../coordinator/index.js";
 import { compileFlow } from "../flows/compiler.js";
+import { compareFlowVersions, isFlowVersion, nextFlowPatch } from "../flows/versions.js";
 import { createPuppeteerFlowDriver } from "../flows/driver.js";
 import { runFlow } from "../flows/interpreter.js";
 import type {
@@ -176,35 +177,14 @@ export class ManagedRuntime extends EventEmitter {
           "utf8",
         ),
       ) as FlowManifest;
-      if (this.options.fixtureOrigin && ['owned-fixture-profile','owned-fixture-brave'].includes(pack.execution.profilePolicyId))
-        manifest.origins[pack.start.originRef] = this.options.fixtureOrigin;
+      // A published bundle supersedes its shipped seed, including a deployment
+      // revision persisted when the owned fixture moved to a new local port.
+      if (!bundle && names.includes(`${pack.id}.vflow.json`)) continue;
       if (!this.options.fixtureOrigin && ['owned-fixture-profile','owned-fixture-brave'].includes(pack.execution.profilePolicyId) && this.options.database) continue;
-      const compiled = compileFlow(pack, manifest);
-      if (
-        !this.options.policies.profiles[pack.execution.profilePolicyId] ||
-        !this.options.policies.proxies[pack.execution.proxyPolicyId]
-      )
-        throw new Error(`Missing execution policy for ${pack.id}`);
       if (this.packs.has(pack.id) && !bundle)
         throw new Error(`Duplicate flow ID ${pack.id}`);
+      const compiled = await this.prepareFlow(pack, manifest, false);
       this.packs.set(pack.id, compiled);
-      await durableWrite(
-        join(this.options.dataDir, "packs", `${compiled.hash}.json`),
-        JSON.stringify({ pack, manifest }),
-      );
-      const origin = manifest.origins[pack.start.originRef]!;
-      await this.coordinator.ensureWorkspace({
-        tenantId: this.options.tenantId,
-        siteId: stableId(`site:${this.options.tenantId}:${origin}`),
-        origin,
-        quotaDomainId: this.quotaId,
-        vendorTeamKey: this.options.teamKey,
-        totalBrowserBudget: this.options.browserBudget,
-        nodeId: this.options.nodeId,
-        nodeIncarnationId: this.incarnation,
-        engineProcessKey: this.incarnation,
-        nodeMaxBrowsers: this.options.maxConcurrency,
-      });
     }
     if (!this.packs.size && !this.options.database) throw new Error("No .flow.json packs found");
     await this.recover();
@@ -223,18 +203,45 @@ export class ManagedRuntime extends EventEmitter {
     }));
   }
   flowDefinitions() { return [...this.packs.values()].map(({ pack, manifest, hash }) => ({ pack: structuredClone(pack), manifest: structuredClone(manifest), hash })); }
+  private async prepareFlow(authoredPack: FlowPack, authoredManifest: FlowManifest, publish: boolean) {
+    const pack = structuredClone(authoredPack), manifest = structuredClone(authoredManifest);
+    // Validate authored data before looking up its deployment identity.
+    compileFlow(pack, manifest);
+    if (!this.options.policies.profiles[pack.execution.profilePolicyId] || !this.options.policies.proxies[pack.execution.proxyPolicyId])
+      throw new RuntimeError('Select an installed profile and proxy policy', 400);
+    const rebound = !!this.options.fixtureOrigin &&
+      ['owned-fixture-profile', 'owned-fixture-brave'].includes(pack.execution.profilePolicyId) &&
+      manifest.origins[pack.start.originRef] !== this.options.fixtureOrigin;
+    if (rebound) {
+      // The origin participates in the signed/content-addressed definition.
+      // Moving our demo must create a new version, never rewrite an old run.
+      let floor = pack.version;
+      for (const previous of await this.coordinator.packVersions(this.options.tenantId, pack.id))
+        if (isFlowVersion(previous.version) && compareFlowVersions(previous.version, floor) > 0) floor = previous.version;
+      pack.version = nextFlowPatch(floor);
+      manifest.origins[pack.start.originRef] = this.options.fixtureOrigin!;
+    }
+    const compiled = compileFlow(pack, manifest), origin = manifest.origins[pack.start.originRef]!;
+    const siteId = stableId(`site:${this.options.tenantId}:${origin}`);
+    await this.coordinator.ensureWorkspace({ tenantId: this.options.tenantId, siteId, origin,
+      quotaDomainId: this.quotaId, vendorTeamKey: this.options.teamKey, totalBrowserBudget: this.options.browserBudget,
+      nodeId: this.options.nodeId, nodeIncarnationId: this.incarnation, engineProcessKey: this.incarnation,
+      nodeMaxBrowsers: this.options.maxConcurrency });
+    const content = JSON.stringify({ pack, manifest });
+    // Cache first, reserve the immutable version second, publish last. A crash
+    // may leave an unused cache/version, but cannot expose a conflicting flow.
+    await durableWrite(join(this.options.dataDir, 'packs', `${compiled.hash}.json`), content);
+    await this.coordinator.registerPackVersion({ tenantId: this.options.tenantId, siteId,
+      pack: { key: pack.id, version: pack.version, hash: compiled.hash, artifactKey: `${compiled.hash}.json` } });
+    if (publish || rebound)
+      await durableWrite(join(this.options.flowsDir, `${pack.id}.vflow.json`), content);
+    return compiled;
+  }
   async installFlow(pack: FlowPack, manifest: FlowManifest) {
     if (!/^[a-z][a-z0-9-]{1,63}$/.test(pack.id)) throw new RuntimeError('Invalid flow ID',400);
     if (this.closed) throw new RuntimeError('Runtime is closing');
-    if (this.options.fixtureOrigin && ['owned-fixture-profile','owned-fixture-brave'].includes(pack.execution.profilePolicyId)) manifest = { ...manifest, origins: { ...manifest.origins, [pack.start.originRef]: this.options.fixtureOrigin } };
-    const compiled = compileFlow(pack,manifest);
-    if (!this.options.policies.profiles[pack.execution.profilePolicyId] || !this.options.policies.proxies[pack.execution.proxyPolicyId]) throw new RuntimeError('Select an installed profile and proxy policy',400);
-    await this.coordinator.ensureWorkspace({ tenantId: this.options.tenantId, siteId: stableId(`site:${this.options.tenantId}:${manifest.origins[pack.start.originRef]!}`), origin: manifest.origins[pack.start.originRef]!, quotaDomainId: this.quotaId, vendorTeamKey: this.options.teamKey, totalBrowserBudget: this.options.browserBudget, nodeId: this.options.nodeId, nodeIncarnationId: this.incarnation, engineProcessKey: this.incarnation, nodeMaxBrowsers: this.options.maxConcurrency });
-    await durableWrite(join(this.options.dataDir,'packs',`${compiled.hash}.json`),JSON.stringify({ pack, manifest }));
-    // One atomic bundle prevents mixed pack/manifest versions on restart. Old runs
-    // retain their immutable content-addressed snapshot in the run journal.
-    await durableWrite(join(this.options.flowsDir,`${pack.id}.vflow.json`),JSON.stringify({ pack, manifest }));
-    this.packs.set(pack.id,compiled); return { id: pack.id, hash: compiled.hash };
+    const compiled = await this.prepareFlow(pack, manifest, true);
+    this.packs.set(pack.id,compiled); return { id: pack.id, version: compiled.pack.version, hash: compiled.hash };
   }
   list() {
     return [...this.records.values()]
@@ -1282,7 +1289,7 @@ export class ManagedRuntime extends EventEmitter {
     return this.coordinator.listEvents(this.options.tenantId, id, 0, 1000);
   }
   async stats() {
-    return this.coordinator.stats(this.quotaId);
+    return this.coordinator.stats(this.quotaId, this.options.browserBudget);
   }
   async screenshot(id: string) {
     const session = this.sessions.get(id);

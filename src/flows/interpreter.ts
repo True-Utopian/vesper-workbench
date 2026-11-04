@@ -49,6 +49,7 @@ export async function runFlow(
   context: FlowContext,
 ): Promise<FlowResult> {
   const { pack } = compiled;
+  const hasControls = Object.values(pack.steps).some(step => step.kind === "branch" || step.kind === "repeat");
   const now = context.now || Date.now;
   if (!compiled.validateInputs(context.inputs))
     throw new FlowExecutionError("invalid-inputs");
@@ -77,6 +78,10 @@ export async function runFlow(
         visits: {},
         attempts: {},
       };
+  if (snapshot.repeatCounts !== undefined && (snapshot.repeatCounts === null || typeof snapshot.repeatCounts !== "object" || Array.isArray(snapshot.repeatCounts) || Object.entries(snapshot.repeatCounts).some(([id, count]) => {
+    const step = pack.steps[id];
+    return step?.kind !== "repeat" || !Number.isSafeInteger(count) || count < 0 || count > step.count;
+  }))) throw new FlowExecutionError("invalid-repeat-progress", snapshot);
   const deadline = snapshot.startedAt + pack.limits.maxTotalMs;
   const controller = new AbortController();
   const remaining = Math.max(0, deadline - now());
@@ -274,14 +279,19 @@ export async function runFlow(
           delete snapshot.pending;
           await persist("undispatched-intent-recovered");
         } else if (previous?.kind === "action") {
+          const previousId = snapshot.pending.stepId;
           const outcome = await reconcile(previous);
           if (outcome === "applied") {
-            await waitState(
+            const observed = await waitState(
               previous.postcondition.states,
               previous.postcondition.require,
               previous.postcondition.timeoutMs,
             );
             delete snapshot.pending;
+            if (hasControls) {
+              snapshot.stepId = previous.next[observed.stateId!];
+              delete snapshot.attempts[previousId];
+            }
             await persist("action-reconciled");
           } else if (outcome === "not-applied") {
             delete snapshot.pending;
@@ -292,7 +302,11 @@ export async function runFlow(
       }
       if (context.resume && !snapshot.pending && snapshot.status !== "review") {
         const state = await waitState();
-        snapshot.stepId = pack.entryByState[state.stateId!];
+        if (hasControls && snapshot.stepId) {
+          // A durable loop continuation must not rewind to entry and repeat
+          // already observed effects. Lost ephemeral values still route to review.
+          if (!pack.steps[snapshot.stepId]?.requires.includes(state.stateId!)) await unexpected("resume-control-state-changed");
+        } else snapshot.stepId = pack.entryByState[state.stateId!];
         if (!snapshot.stepId) await unexpected("undeclared-entry");
       }
     } else {
@@ -336,7 +350,7 @@ export async function runFlow(
       if (!step) throw new FlowExecutionError("invalid-step", snapshot);
       if (++snapshot.steps > pack.limits.maxSteps)
         throw new FlowExecutionError("step-budget", snapshot);
-      snapshot.visits[stepId] = (snapshot.visits[stepId] || 0) + 1;
+      snapshot.visits[stepId] = (Object.hasOwn(snapshot.visits, stepId) ? snapshot.visits[stepId]! : 0) + 1;
       if (snapshot.visits[stepId]! > pack.limits.maxStateVisits)
         throw new FlowExecutionError("visit-budget", snapshot);
       await persist("step-started");
@@ -450,6 +464,25 @@ export async function runFlow(
           mode: step.mode,
           snapshot: structuredClone(snapshot),
         };
+      }
+      if (step.kind === "branch") {
+        snapshot.stepId = step.next[recognition.stateId!];
+        await persist("branch-selected", {stepId, stateId: recognition.stateId});
+        continue;
+      }
+      if (step.kind === "repeat") {
+        const count = snapshot.repeatCounts && Object.hasOwn(snapshot.repeatCounts, stepId) ? snapshot.repeatCounts[stepId]! : 0;
+        snapshot.repeatCounts ??= {};
+        if (count < step.count) {
+          snapshot.repeatCounts[stepId] = count + 1;
+          snapshot.stepId = step.body;
+          await persist("repeat-entered", {stepId, reason: `${count + 1}/${step.count}`});
+        } else {
+          delete snapshot.repeatCounts[stepId];
+          snapshot.stepId = step.next[recognition.stateId!];
+          await persist("repeat-completed", {stepId});
+        }
+        continue;
       }
       if (step.kind === "input") {
         try {
@@ -566,7 +599,7 @@ export async function runFlow(
         }
         continue;
       }
-      const attempt = (snapshot.attempts[stepId] || 0) + 1;
+      const attempt = (Object.hasOwn(snapshot.attempts, stepId) ? snapshot.attempts[stepId]! : 0) + 1;
       if (attempt > step.retry.maxAttempts) {
         snapshot.stepId = step.onError;
         await persist("attempt-budget");
@@ -663,7 +696,7 @@ export async function runFlow(
         const id = snapshot.pending.id;
         delete snapshot.pending;
         snapshot.stepId = step.next[result.stateId!];
-        if (["wait", "scrape", "bindIdentity"].includes(step.do.op))
+        if (hasControls || ["wait", "scrape", "bindIdentity"].includes(step.do.op))
           delete snapshot.attempts[stepId];
         await persist("action-observed", {
           stateId: result.stateId,
